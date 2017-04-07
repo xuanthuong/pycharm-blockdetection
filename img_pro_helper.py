@@ -3,7 +3,7 @@ import numpy as np
 from collections import deque
 import json
 
-LEN_TOL = 5000
+LEN_TOL = 20000
 LN_TOL = 100000
 GAP_TOL = 50
 NON_LN_TOL = 50000
@@ -11,6 +11,9 @@ LN_SPACE = 35
 LN_NONE = 10
 WRD_SPACE = 100
 WRD_NONE = 1000
+MIN_NUM_LN = 3
+MIN_LEN_LN = 100000
+OFFSET = 3
 
 
 def line_cut_hrz(queue, result, queue_elm):
@@ -18,9 +21,9 @@ def line_cut_hrz(queue, result, queue_elm):
     ln_roi_img = queue_elm['lnRoi']
     (h, w) = roi_img.shape[:2]
     pre_y_pos = 0
-    max_len = 100
+    max_len = LEN_TOL * 2
     has_line = False
-    for y_pos in range(h):
+    for y_pos in range(h):  # y1 -> y2
         tmp = np.sum(ln_roi_img[y_pos:y_pos + 1, 0:w])
         if tmp > max_len:
             max_len = tmp
@@ -28,14 +31,14 @@ def line_cut_hrz(queue, result, queue_elm):
         if np.sum(ln_roi_img[y_pos:y_pos + 1, 0:w]) > max_len - LEN_TOL:
             if y_pos - pre_y_pos < GAP_TOL:
                 continue
-            roi = roi_img[pre_y_pos:y_pos, 0:w]
-            ln_roi = ln_roi_img[pre_y_pos:y_pos, 0:w]
+            roi = roi_img[pre_y_pos:y_pos + OFFSET, 0:w]
+            ln_roi = ln_roi_img[pre_y_pos:y_pos + OFFSET, 0:w]
             queue.append({'roi': roi,
                           'lnRoi': ln_roi,
-                          'x1': 0,
-                          'x2': w,
-                          'y1': pre_y_pos,
-                          'y2': y_pos,
+                          'x1': queue_elm['x1'],
+                          'x2': queue_elm['x2'],
+                          'y1': pre_y_pos + queue_elm['y1'],
+                          'y2': y_pos + queue_elm['y1'],
                           'flag': 'V', })
             pre_y_pos = y_pos
             has_line = True
@@ -49,7 +52,7 @@ def line_cut_vrt(queue, result, queue_elm):
     ln_roi_img = queue_elm['lnRoi']
     (h, w) = roi_img.shape[:2]
     pre_x_pos = 0
-    max_len = LEN_TOL + 100
+    max_len = LEN_TOL * 2
     has_line = False
     for x_pos in range(w):
         tmp = np.sum(ln_roi_img[0:h, x_pos:x_pos + 1])
@@ -59,14 +62,14 @@ def line_cut_vrt(queue, result, queue_elm):
         if np.sum(ln_roi_img[0:h, x_pos:x_pos + 1]) > max_len - LEN_TOL:
             if x_pos - pre_x_pos < GAP_TOL:
                 continue
-            roi = roi_img[0:h, pre_x_pos:x_pos]
-            ln_roi = ln_roi_img[0:h, pre_x_pos:x_pos]
+            roi = roi_img[0:h, pre_x_pos:x_pos + 1]
+            ln_roi = ln_roi_img[0:h, pre_x_pos:x_pos + 1]
             queue.append({'roi': roi,
                           'lnRoi': ln_roi,
-                          'x1': pre_x_pos,
-                          'x2': x_pos,
-                          'y1': 0,
-                          'y2': h,
+                          'x1': pre_x_pos + queue_elm['x1'],
+                          'x2': x_pos + queue_elm['x1'],
+                          'y1': queue_elm['y1'],
+                          'y2': queue_elm['y2'],
                           'flag': 'H', })
             pre_x_pos = x_pos
             has_line = True
@@ -103,12 +106,12 @@ def line_cut_queue(src_img, line_img, out_folder):
         queue, result = line_cut_do(queue, result, queue[0])
         queue.popleft()
         t += 1
-
+        break
     # print('Done Cutting Block')
     # print(result)
 
     i = 1
-    for q in result:
+    for q in queue:
         tmp = q['roi']
         tmp = cv2.cvtColor(tmp, cv2.COLOR_BGR2GRAY)
         (h, w) = tmp.shape[:2]
@@ -189,8 +192,8 @@ def non_line_cut_vrt(queue):
                                'lnRoi': ln_roi,
                                'x1': x1,
                                'x2': x2,
-                               'y1': 0,
-                               'y2': h,
+                               'y1': q['y1'],
+                               'y2': q['y2'],
                                'flag': 'NL', })
                 tmp = -9999
                 meet_text = False
@@ -218,6 +221,30 @@ def non_line_cut_block(src_img, gray, out_folder):
         # print(json.dumps(res_obj))
 
 
+def has_hrz_line(ln_roi):
+    (h, w) = ln_roi.shape[:2]
+    num_line = 0
+    for k in range(h):
+        row = ln_roi[k:k + 1, 0:w]
+        if np.sum(row) > MIN_LEN_LN:
+            num_line += 1
+    if num_line > MIN_NUM_LN:
+        return True
+    return False
+
+
+def has_vrt_line(ln_roi):
+    (h, w) = ln_roi.shape[:2]
+    num_line = 0
+    for j in range(w):
+        col = ln_roi[0:h, j:j + 1]
+        if np.sum(col) > MIN_LEN_LN:
+            num_line += 1
+    if num_line > MIN_NUM_LN:
+        return True
+    return False
+
+
 def doc_has_line(src_img_file):
     src = cv2.imread(src_img_file)
     (h, w) = src.shape[:2]
@@ -239,9 +266,9 @@ def doc_has_line(src_img_file):
     vrt_lines = cv2.erode(gray, vrt_kernel, iterations=1)
     vrt_lines = cv2.dilate(vrt_lines, vrt_kernel, iterations=1)
     line_img = hrz_lines + vrt_lines
-    non_zero_pixels = cv2.countNonZero(line_img)
-    print (non_zero_pixels)
-    if non_zero_pixels > NON_LN_TOL:
+    # non_zero_pixels = cv2.countNonZero(line_img)
+    # print (non_zero_pixels)
+    if has_hrz_line(line_img) and has_vrt_line(line_img):
         return True, src, line_img, gray
     else:
         return False, src, line_img, gray
@@ -250,33 +277,17 @@ def doc_has_line(src_img_file):
 def cut_cell_all_cases(src_img_file, out_folder):
     has_line, src_img, line_img, gray = doc_has_line(src_img_file)
     cv2.imwrite(out_folder + 'gray.jpg', gray)
-    cv2.imwrite(out_folder + 'line.jpg', line_img)
     if has_line:
-        print('has line')
+        # print('has line')
+        cv2.imwrite(out_folder + 'line.jpg', line_img)
         line_cut_queue(src_img, line_img, out_folder)
     else:
-        print('non line')
+        # print('non line')
+        cv2.imwrite(out_folder + 'non_line.jpg', line_img)
         non_line_cut_block(src_img, gray, out_folder)
 
 
 # Below functions are currently unused
-def has_hrz_line(ln_roi):
-    (h, w) = ln_roi.shape[:2]
-    for k in range(h):
-        row = ln_roi[k:k + 1, 0:w]
-        if np.sum(row) > NON_LN_TOL:
-            return True
-    return False
-
-
-def has_vrt_line(ln_roi):
-    (h, w) = ln_roi.shape[:2]
-    for j in range(w):
-        col = ln_roi[0:h, j:j + 1]
-        if np.sum(col) > NON_LN_TOL:
-            return True
-    return False
-
 
 def cut_sub_block(ln_roi, roi, num_roi, out_folder):
     pre_x_pos = 0
