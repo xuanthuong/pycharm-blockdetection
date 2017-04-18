@@ -3,9 +3,9 @@ import numpy as np
 from collections import deque
 import json
 
-LEN_TOL = 20000
-LN_TOL = 100000
-GAP_TOL = 50
+LEN_TOL = 5000
+CELL_HEIGHT_TOL = 50  # depend on size of image
+CELL_WIDTH_TOL = 100   # depend on size of image
 NON_LN_TOL = 50000
 LN_SPACE = 35
 LN_NONE = 10
@@ -13,7 +13,10 @@ WRD_SPACE = 100
 WRD_NONE = 1000
 MIN_NUM_LN = 3
 MIN_LEN_LN = 100000
-OFFSET = 3
+OFFSET = 5
+EPS = 0.01
+MIN_CNT_AREA = 10000
+MAX_CNT_AREA = 3000000
 
 
 def line_cut_hrz(queue, result, queue_elm):
@@ -29,7 +32,7 @@ def line_cut_hrz(queue, result, queue_elm):
             max_len = tmp
     for y_pos in range(h):
         if np.sum(ln_roi_img[y_pos:y_pos + 1, 0:w]) > max_len - LEN_TOL:
-            if y_pos - pre_y_pos < GAP_TOL:
+            if y_pos - pre_y_pos < CELL_HEIGHT_TOL:
                 continue
             roi = roi_img[pre_y_pos:y_pos + OFFSET, 0:w]
             ln_roi = ln_roi_img[pre_y_pos:y_pos + OFFSET, 0:w]
@@ -58,12 +61,14 @@ def line_cut_vrt(queue, result, queue_elm):
         tmp = np.sum(ln_roi_img[0:h, x_pos:x_pos + 1])
         if tmp > max_len:
             max_len = tmp
+    last_x_pos = 0
     for x_pos in range(w):
+        last_x_pos = x_pos
         if np.sum(ln_roi_img[0:h, x_pos:x_pos + 1]) > max_len - LEN_TOL:
-            if x_pos - pre_x_pos < GAP_TOL:
+            if x_pos - pre_x_pos < CELL_WIDTH_TOL:
                 continue
-            roi = roi_img[0:h, pre_x_pos:x_pos + 1]
-            ln_roi = ln_roi_img[0:h, pre_x_pos:x_pos + 1]
+            roi = roi_img[0:h, pre_x_pos:x_pos]
+            ln_roi = ln_roi_img[0:h, pre_x_pos:x_pos]
             queue.append({'roi': roi,
                           'lnRoi': ln_roi,
                           'x1': pre_x_pos + queue_elm['x1'],
@@ -75,6 +80,17 @@ def line_cut_vrt(queue, result, queue_elm):
             has_line = True
     if not has_line:
         result.append(queue_elm)
+    else:
+        if last_x_pos - pre_x_pos > CELL_WIDTH_TOL:
+            roi = roi_img[0:h, pre_x_pos:last_x_pos]
+            ln_roi = ln_roi_img[0:h, pre_x_pos:last_x_pos]
+            queue.append({'roi': roi,
+                           'lnRoi': ln_roi,
+                           'x1': pre_x_pos + queue_elm['x1'],
+                           'x2': x_pos + queue_elm['x1'],
+                           'y1': queue_elm['y1'],
+                           'y2': queue_elm['y2'],
+                           'flag': 'H', })
     return queue, result
 
 
@@ -103,15 +119,15 @@ def line_cut_queue(src_img, line_img, out_folder):
     t = 1
     while queue:
         # print('Cutting time: %d' % t)
+        # print('Cutting type: %s' % queue[0]['flag'])
         queue, result = line_cut_do(queue, result, queue[0])
         queue.popleft()
         t += 1
-        break
     # print('Done Cutting Block')
     # print(result)
 
     i = 1
-    for q in queue:
+    for q in result:
         tmp = q['roi']
         tmp = cv2.cvtColor(tmp, cv2.COLOR_BGR2GRAY)
         (h, w) = tmp.shape[:2]
@@ -245,6 +261,102 @@ def has_vrt_line(ln_roi):
     return False
 
 
+# def hough_line(src_img_file, out_folder):
+    # img = cv2.imread(src_img_file)
+    # gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    # edges = cv2.Canny(gray, 50, 150, apertureSize=3)
+    # lines = cv2.HoughLines(edges, 1, np.pi/180, 200)
+    # # for i in range(lines.shape[0]):
+    # for rho, theta in lines[20]:
+    #     a = np.cos(theta)
+    #     b = np.sin(theta)
+    #     x0 = a*rho
+    #     y0 = b*rho
+    #     x1 = int(x0 + 3000*(-b))
+    #     y1 = int(y0 + 3000*a)
+    #     x2 = int(x0 - 3000*(-b))
+    #     y2 = int(y0 - 3000*a)
+    #     cv2.line(img, (x1, y1), (x2, y2), (0, 0, 255), 2)
+    # cv2.imwrite(out_folder + 'gray.jpg', gray)
+    # cv2.imwrite(out_folder + 'houghlines.jpg', edges)
+    # cv2.imwrite(out_folder + 'result.jpg', img)
+
+    # img = cv2.imread(src_img_file)
+    #
+    # gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    # edges = cv2.Canny(gray, 50, 150, apertureSize=3)
+    # print img.shape[1]
+    # print img.shape
+    # minLineLength = img.shape[1] - 300
+    # lines = cv2.HoughLinesP(image=edges, rho=0.02, theta=np.pi / 500, threshold=10, lines=np.array([]),
+    #                         minLineLength=minLineLength, maxLineGap=100)
+    #
+    # a, b, c = lines.shape
+    # for i in range(a):
+    #     cv2.line(img, (lines[i][0][0], lines[i][0][1]), (lines[i][0][2], lines[i][0][3]), (0, 0, 255), 3, cv2.LINE_AA)
+    #
+    # cv2.imshow('edges', edges)
+    # cv2.imshow('result', img)
+    #
+    # cv2.waitKey(0)
+    # cv2.destroyAllWindows()
+
+
+def find_contours(src_img_file, out_folder):
+    im_cnt = cv2.imread(src_img_file)
+    im_src = im_cnt.copy()
+    gray = cv2.cvtColor(im_cnt, cv2.COLOR_BGR2GRAY)
+    ret, thresh = cv2.threshold(gray, 127, 255, 0)
+    # kernel = np.ones((5, 5), np.uint8)
+    # thresh = cv2.erode(thresh, kernel, iterations=1)
+    # thresh = cv2.dilate(thresh, kernel, iterations=1)
+    image, contours, hierarchy = cv2.findContours(thresh, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+    # cv2.imwrite(out_folder + 'gray.jpg', gray)
+    # cv2.imwrite(out_folder + 'threshold.jpg', thresh)
+    # cv2.drawContours(im, contours, -1, (0, 255, 0), 3)
+    num_cnt = 0
+    queue = deque([])
+    for cnt in contours:
+        approx = cv2.approxPolyDP(cnt, EPS * cv2.arcLength(cnt, True), True)
+        tmp_len = len(approx)
+        tmp_area = cv2.contourArea(cnt)
+        if tmp_len == 4 and MIN_CNT_AREA < tmp_area < MAX_CNT_AREA:
+            print(cv2.contourArea(cnt))
+            num_cnt += 1
+            cv2.drawContours(im_cnt, [cnt], 0, (0, 255, 0), 3)
+            x, y, w, h = cv2.boundingRect(cnt)
+            roi = im_src[y:y + h, x:x + w]
+            ln_roi = im_src[y:y + h, x:x + w]
+            queue.append({'roi': roi,
+                          'lnRoi': ln_roi,
+                          'x1': x,
+                          'x2': x + w,
+                          'y1': y,
+                          'y2': y + h,
+                          'flag': 'H', })
+    cv2.imwrite(out_folder + 'contours.jpg', im_cnt)
+    print ('Number of contours: %d' % num_cnt)
+    save_result(queue, out_folder)
+
+
+def save_result(result, out_folder):
+    i = 1
+    for q in result:
+        cv2.imwrite(
+            out_folder + 'b' + str(i) + '-' + str(q['x1']) + '-' + str(q['x2']) + '-' + str(q['y1']) + '-' + str(
+                q['y2']) + '.jpg', q['roi'])
+        # res_obj = {
+        #     "x1": q['x1'],
+        #     "x2": q['x2'],
+        #     "y1": q['y1'],
+        #     "y2": q['y2'],
+        #     "name": 'b' + str(i) + '-' + str(q['x1']) + '-' + str(q['x2']) + '-' + str(q['y1']) + '-' + str(
+        #         q['y2']) + '.jpg'
+        # }
+        i += 1
+        # print(json.dumps(res_obj))
+
+
 def doc_has_line(src_img_file):
     src = cv2.imread(src_img_file)
     (h, w) = src.shape[:2]
@@ -277,6 +389,7 @@ def doc_has_line(src_img_file):
 def cut_cell_all_cases(src_img_file, out_folder):
     has_line, src_img, line_img, gray = doc_has_line(src_img_file)
     cv2.imwrite(out_folder + 'gray.jpg', gray)
+    has_line = True
     if has_line:
         # print('has line')
         cv2.imwrite(out_folder + 'line.jpg', line_img)
@@ -295,7 +408,7 @@ def cut_sub_block(ln_roi, roi, num_roi, out_folder):
     (h, w) = roi.shape[:2]
     for x_pos in range(w):
         if np.sum(ln_roi[0:h, x_pos:x_pos + 1]) > 30000:
-            if x_pos - pre_x_pos < GAP_TOL:
+            if x_pos - pre_x_pos < CELL_WIDTH_TOL:
                 continue
             sub_roi = roi[0:h, pre_x_pos:x_pos]
             cv2.imwrite(out_folder + str(num_roi) + 'sub_roi.jpg', sub_roi)
@@ -338,7 +451,7 @@ def cut_block(src_img_file, out_folder):
     num_roi = 1
     for y_pos in range(h):
         if np.sum(line_img[y_pos:y_pos + 1, 0:w]) > 200000:
-            if y_pos - pre_y_pos < GAP_TOL:
+            if y_pos - pre_y_pos < CELL_HEIGHT_TOL:
                 continue
             roi = src[pre_y_pos:y_pos, 0:w]
             ln_roi = line_img[pre_y_pos:y_pos, 0:w]
